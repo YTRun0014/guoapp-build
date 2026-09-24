@@ -40,6 +40,7 @@ class _RankingsScreenState extends State<RankingsScreen> {
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_onScroll);
     widget.repository.catalogUpdates.addListener(_metadataChanged);
     _initialize();
   }
@@ -48,8 +49,20 @@ class _RankingsScreenState extends State<RankingsScreen> {
   void dispose() {
     widget.repository.catalogUpdates.removeListener(_metadataChanged);
     _generation++;
+    _scroll.removeListener(_onScroll);
     _scroll.dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (!mounted || !_hasMore || _loading || _more || !_scroll.hasClients) {
+      return;
+    }
+    final position = _scroll.position;
+    final threshold = (position.viewportDimension * 1.2).clamp(260.0, 720.0);
+    if (position.extentAfter <= threshold) {
+      _load(more: true);
+    }
   }
 
   void _metadataChanged() {

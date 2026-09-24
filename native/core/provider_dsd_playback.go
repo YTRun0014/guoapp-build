@@ -244,6 +244,7 @@ func dsdSplitTopLevel(value string) []string {
 type dsdExpressionParser struct {
 	text  string
 	index int
+	depth int
 }
 
 func (parser *dsdExpressionParser) skipSpaces() {
@@ -320,8 +321,13 @@ func (parser *dsdExpressionParser) parseFactor() (int, bool) {
 		return 0, false
 	}
 	if parser.text[parser.index] == '(' {
+		if parser.depth >= 32 {
+			return 0, false
+		}
+		parser.depth++
 		parser.index++
 		value, ok := parser.parseExpression()
+		parser.depth--
 		parser.skipSpaces()
 		if !ok || parser.index >= len(parser.text) || parser.text[parser.index] != ')' {
 			return 0, false
@@ -341,7 +347,7 @@ func (parser *dsdExpressionParser) parseFactor() (int, bool) {
 }
 
 func dsdEvaluateDigitExpression(value string) (int, bool) {
-	if strings.Trim(value, "0123456789()+-*/% \t\r\n") != "" {
+	if len(value) > 4096 || strings.Trim(value, "0123456789()+-*/% \t\r\n") != "" {
 		return 0, false
 	}
 	parser := &dsdExpressionParser{text: value}
@@ -381,6 +387,9 @@ func dsdAaDigit(part string) (string, bool) {
 }
 
 func decodeDSDAaencode(raw string) (string, bool) {
+	if len(raw) > 1<<20 {
+		return "", false
+	}
 	const marker = "(ﾟДﾟ) ['_'] ( (ﾟДﾟ) ['_']"
 	const tailMarker = "+ (ﾟДﾟ)[ﾟoﾟ]"
 	start := strings.Index(raw, marker)
@@ -395,6 +404,9 @@ func decodeDSDAaencode(raw string) (string, bool) {
 	tokens := strings.Split(body[:end], "(ﾟДﾟ)[ﾟεﾟ]+")
 	var decoded strings.Builder
 	for _, token := range tokens[1:] {
+		if decoded.Len() > 64<<10 {
+			return "", false
+		}
 		var digits strings.Builder
 		for _, part := range dsdSplitTopLevel(token) {
 			digit, ok := dsdAaDigit(part)
@@ -464,7 +476,7 @@ func (d *Downloader) signDSDMedia(ctx context.Context, address, pageURL, site st
 	pageContext := context.WithValue(ctx, providerTextUserAgentKey{}, dsdUserAgent)
 	body, err := d.fetchProviderText(pageContext, vplayerURL, site+"/")
 	if err != nil {
-		return address, false, nil
+		return "", false, err
 	}
 	signed, found := dsdSignedPathFromVplayer(body)
 	if !found || signed == "" {

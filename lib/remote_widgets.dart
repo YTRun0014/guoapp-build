@@ -13,6 +13,10 @@ class RemoteTarget extends StatefulWidget {
     this.autofocus = false,
     this.selected = false,
     this.label,
+    this.radius = 14,
+    this.padding = const EdgeInsets.all(4),
+    this.borderWidth = 3,
+    this.outlined = false,
   });
   final Widget child;
   final VoidCallback? onPressed;
@@ -21,6 +25,10 @@ class RemoteTarget extends StatefulWidget {
   final bool autofocus;
   final bool selected;
   final String? label;
+  final double radius;
+  final EdgeInsetsGeometry padding;
+  final double borderWidth;
+  final bool outlined;
 
   @override
   State<RemoteTarget> createState() => _RemoteTargetState();
@@ -72,21 +80,25 @@ class _RemoteTargetState extends State<RemoteTarget> {
           onTap: widget.onPressed,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 120),
-            padding: const EdgeInsets.all(4),
+            padding: widget.padding,
             decoration: BoxDecoration(
-              color: _focused
+              color: widget.selected
                   ? Theme.of(context).colorScheme.primaryContainer
-                  : widget.selected
+                  : _focused && widget.outlined
+                  ? Theme.of(context).colorScheme.surfaceContainerHighest
+                  : _focused
                   ? Theme.of(context).colorScheme.primaryContainer
                   : Colors.transparent,
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(widget.radius),
               border: Border.all(
                 color: _focused
                     ? Theme.of(context).colorScheme.primary
                     : widget.selected
                     ? Theme.of(context).colorScheme.primary
+                    : widget.outlined
+                    ? Theme.of(context).colorScheme.outlineVariant
                     : Colors.transparent,
-                width: 3,
+                width: widget.borderWidth,
               ),
             ),
             child: ExcludeFocus(child: widget.child),
@@ -334,12 +346,14 @@ class RemoteEpisodeButton extends StatelessWidget {
     required this.onPressed,
     this.vip = false,
     this.current = false,
+    this.compact = false,
     this.focusNode,
     this.onFocus,
   });
   final int number;
   final bool vip;
   final bool current;
+  final bool compact;
   final VoidCallback onPressed;
   final FocusNode? focusNode;
   final VoidCallback? onFocus;
@@ -349,6 +363,10 @@ class RemoteEpisodeButton extends StatelessWidget {
     focusNode: focusNode,
     onFocus: onFocus,
     selected: current,
+    radius: compact ? 8 : 14,
+    padding: compact ? const EdgeInsets.all(2) : const EdgeInsets.all(4),
+    borderWidth: compact ? 1.2 : 2,
+    outlined: true,
     onPressed: onPressed,
     label: '第 $number 集${vip ? '，VIP 试看' : ''}',
     child: Center(
@@ -360,15 +378,18 @@ class RemoteEpisodeButton extends StatelessWidget {
               '$number',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 20),
+              style: TextStyle(
+                fontSize: compact ? 14 : 20,
+                fontWeight: current ? FontWeight.w700 : FontWeight.w500,
+              ),
             ),
           ),
           if (vip) ...[
-            const SizedBox(width: 4),
+            SizedBox(width: compact ? 2 : 4),
             Icon(
               Icons.workspace_premium_rounded,
               color: Theme.of(context).colorScheme.tertiary,
-              size: 18,
+              size: compact ? 15 : 18,
             ),
           ],
         ],

@@ -82,7 +82,7 @@ class _SavedLibraryState extends State<SavedLibrary> {
     final state = widget.store.following(drama.id);
     final badge = state == null
         ? null
-        : '${state.label}${state.newEpisodes > 0 ? ' · 更新 ${state.newEpisodes} 集' : ''}';
+        : '${state.label}${state.hasUpdates ? ' · ${state.updateLabel}' : ''}';
     return DramaTile(
       key: ValueKey('saved-${drama.id}'),
       drama: drama,
@@ -116,7 +116,7 @@ class _SavedLibraryState extends State<SavedLibrary> {
         return widget.history ||
             _filter.isEmpty ||
             (_filter == 'updates'
-                ? (state?.newEpisodes ?? 0) > 0
+                ? state?.hasUpdates == true
                 : state?.status.name == _filter);
       }).toList();
       final ids = items.map((drama) => drama.id).toSet();

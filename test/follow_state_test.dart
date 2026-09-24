@@ -34,6 +34,30 @@ void main() {
     duration: 60,
     updatedAt: DateTime.utc(2026, 9, 21, 12),
   );
+  const seasonOne = Drama(
+    id: 'hongguo:season-one',
+    source: 'hongguo',
+    title: '合成系列 第一季',
+    episodes: 12,
+  );
+  const seasonTwo = Drama(
+    id: 'hongguo:season-two',
+    source: 'hongguo',
+    title: '合成系列 第二季',
+    episodes: 8,
+  );
+  const plainSeasonOne = Drama(
+    id: 'hongguo:plain-one',
+    source: 'hongguo',
+    title: '无后缀系列',
+    episodes: 10,
+  );
+  const plainSeasonTwo = Drama(
+    id: 'hongguo:plain-two',
+    source: 'hongguo',
+    title: '无后缀系列 第2季',
+    episodes: 10,
+  );
   Future<LocalStore> create([Map<String, Object> values = const {}]) async {
     SharedPreferences.setMockInitialValues(values);
     final store = LocalStore(await SharedPreferences.getInstance());
@@ -84,6 +108,70 @@ void main() {
       expect(restarted.history, isEmpty);
     },
   );
+
+  test(
+    'hongguo series season notices are local, persistent and explicitly read',
+    () async {
+      final store = await create();
+      await store.toggleFavorite(seasonOne);
+      await store.refreshDramas([seasonOne, seasonTwo]);
+      final state = store.following(seasonOne.id)!;
+      expect(state.newEpisodes, 0);
+      expect(state.newSeasons, 1);
+      expect(state.updateLabel, '新季 1 部');
+      expect(state.seriesSeasons[seasonTwo.id]!.title, seasonTwo.title);
+      expect(store.seriesDramasFor(seasonOne).map((drama) => drama.id), [
+        seasonOne.id,
+        seasonTwo.id,
+      ]);
+      final restarted = LocalStore(store.preferences);
+      addTearDown(restarted.dispose);
+      expect(restarted.following(seasonOne.id)!.newSeasons, 1);
+      await restarted.markSeriesSeasonRead(seasonOne.id, seasonTwo.id);
+      expect(restarted.following(seasonOne.id)!.newSeasons, 0);
+      await restarted.refreshDramas([seasonTwo]);
+      expect(restarted.following(seasonOne.id)!.newSeasons, 0);
+      await restarted.refreshDramas([
+        const Drama(
+          id: 'huangdou:season-three',
+          source: 'huangdou',
+          title: '合成系列 第三季',
+        ),
+      ]);
+      expect(restarted.following(seasonOne.id)!.seriesSeasons.keys, [
+        seasonTwo.id,
+      ]);
+    },
+  );
+
+  test(
+    'hongguo plain first season can discover an explicit later season',
+    () async {
+      final store = await create();
+      await store.toggleFavorite(plainSeasonOne);
+      await store.refreshDramas([plainSeasonTwo]);
+      expect(store.following(plainSeasonOne.id)!.newSeasons, 1);
+      expect(store.seriesDramasFor(plainSeasonOne).map((drama) => drama.id), [
+        plainSeasonOne.id,
+        plainSeasonTwo.id,
+      ]);
+    },
+  );
+
+  test('hongguo series candidates include refreshed catalog dramas', () async {
+    final store = await create();
+    await store.refreshDramas([plainSeasonOne, plainSeasonTwo]);
+    expect(store.seriesDramasFor(plainSeasonOne).map((drama) => drama.id), [
+      plainSeasonOne.id,
+      plainSeasonTwo.id,
+    ]);
+    final restarted = LocalStore(store.preferences);
+    addTearDown(restarted.dispose);
+    expect(restarted.seriesDramasFor(plainSeasonOne).map((drama) => drama.id), [
+      plainSeasonOne.id,
+      plainSeasonTwo.id,
+    ]);
+  });
 
   test(
     'actual playback advances automatic status and new episodes reopen it',

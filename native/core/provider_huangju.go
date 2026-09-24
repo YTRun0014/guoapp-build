@@ -98,7 +98,10 @@ func huangjuDramaFromMap(row map[string]any, site, sourceID string) (Drama, erro
 		score = ""
 	}
 	status := mapString(row, "status")
-	if status != "completed" && status != "ongoing" {
+	if status == "completed" {
+		status = "finished"
+	}
+	if status != "finished" && status != "ongoing" {
 		status = ""
 	}
 	description, _ := row["description"].(string)

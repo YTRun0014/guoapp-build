@@ -63,6 +63,30 @@ class SourceFixtureRepository extends FixtureRepository {
 }
 
 void main() {
+  testWidgets('source list keeps bottom content above system navigation', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    tester.view.padding = const FakeViewPadding(bottom: 34);
+    addTearDown(tester.view.reset);
+    SharedPreferences.setMockInitialValues({});
+    final store = LocalStore(await SharedPreferences.getInstance());
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SourcesScreen(
+          repository: SourceFixtureRepository(),
+          store: store,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final list = tester.widget<ListView>(find.byType(ListView));
+    expect((list.padding! as EdgeInsets).bottom, 50);
+    await tester.pumpWidget(const SizedBox.shrink());
+    store.dispose();
+  });
+
   testWidgets(
     'source update prevents duplicate submits and can stop without losing cache',
     (tester) async {

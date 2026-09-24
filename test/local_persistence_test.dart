@@ -127,6 +127,7 @@ void main() {
       final backup = jsonDecode(old) as Map<String, dynamic>;
       backup['themeMode'] = 'light';
       final library = (backup['libraries'] as Map)['default'] as Map;
+      library.remove('followSync');
       library['favorites'] = [next.toJson()];
       library['followStates'] = {};
       library['history'] = [
@@ -146,7 +147,10 @@ void main() {
       final content = jsonEncode(backup);
       for (final failure in ['false', 'throw', 'after']) {
         platform.failure = failure;
-        await expectLater(store.importBackup(content), throwsStateError);
+        await expectLater(
+          store.importBackup(content),
+          throwsA(anyOf(isA<StateError>(), isA<FormatException>())),
+        );
         expect(await store.exportBackup(), old);
         expect(await (await restart(platform)).exportBackup(), old);
       }

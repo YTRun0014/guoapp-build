@@ -69,6 +69,9 @@ func (client *huangjuAPIClient) guestToken(ctx context.Context) (string, error) 
 		client.mu.Unlock()
 		select {
 		case <-pending.done:
+			if (errors.Is(pending.err, context.Canceled) || errors.Is(pending.err, context.DeadlineExceeded)) && ctx.Err() == nil {
+				return client.guestToken(ctx)
+			}
 			return pending.token, pending.err
 		case <-ctx.Done():
 			return "", ctx.Err()

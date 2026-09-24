@@ -65,8 +65,28 @@ func TestNativePlaybackFallbackPreservesKeysAndReleasesOnlyOldSession(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.URL != second.URL || next.Headers["Referer"] != second.Referer || next.Key != "66656463626139383736353433323130" || next.RouteIndex != 1 || next.Session == plan.Session {
+	if next.URL == "" || next.Headers["Referer"] != second.Referer || next.Key != "66656463626139383736353433323130" || next.RouteIndex != 1 || next.Session == plan.Session {
 		t.Fatalf("alternate route lost its credentials: %+v", next)
+	}
+	engine.mu.Lock()
+	nextChoice := engine.playbacks[next.Session]
+	engine.mu.Unlock()
+	engine.stream.mu.Lock()
+	nextStream := engine.stream.sessions[nextChoice.streamSession]
+	engine.stream.mu.Unlock()
+	if nextStream == nil {
+		t.Fatal("alternate route did not open a stream session")
+	}
+	foundSecond := false
+	nextStream.mu.Lock()
+	for _, asset := range nextStream.assets {
+		if asset.address == second.URL {
+			foundSecond = true
+		}
+	}
+	nextStream.mu.Unlock()
+	if !foundSecond {
+		t.Fatalf("alternate route opened the wrong source: %+v", nextStream.assets)
 	}
 	engine.nativeReleasePlayback(plan.Session)
 	if _, ok := engine.playbacks[next.Session]; !ok {

@@ -168,7 +168,9 @@ extension LocalStoreSync on LocalStore {
         document.records[checked.id] = checked;
         if (checked.followed) {
           favorites[checked.id] = checked.drama;
-          states[checked.id] = checked.following;
+          states[checked.id] = checked.following.copyWith(
+            seriesSeasons: states[checked.id]?.seriesSeasons ?? const {},
+          );
           final watch = checked.watch;
           if (watch == null) {
             history.remove(checked.id);
@@ -240,7 +242,9 @@ extension LocalStoreSync on LocalStore {
       final history = Map.of(_history);
       if (next.followed) {
         favorites[id] = next.drama;
-        states[id] = next.following;
+        states[id] = next.following.copyWith(
+          seriesSeasons: states[id]?.seriesSeasons ?? const {},
+        );
         if (next.watch case final watch?) {
           history[id] = watch;
         } else {

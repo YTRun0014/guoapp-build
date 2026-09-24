@@ -9,7 +9,6 @@ import 'playback_preferences.dart';
 import 'video_enhancement.dart';
 import 'video_enhancement_preferences.dart';
 import 'video_enhancement_settings.dart';
-import 'playback_buffer.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
 
@@ -27,7 +26,6 @@ class TelevisionControls extends StatefulWidget {
     required this.onEpisodes,
     required this.onSettings,
     required this.onBack,
-    this.onPush,
     this.enhancement,
   });
   final Player player;
@@ -41,7 +39,6 @@ class TelevisionControls extends StatefulWidget {
   final Future<void> Function() onEpisodes;
   final Future<void> Function() onSettings;
   final VoidCallback onBack;
-  final Future<void> Function()? onPush;
   final VideoEnhancementController? enhancement;
 
   @override
@@ -53,7 +50,6 @@ class _TelevisionControlsState extends State<TelevisionControls> {
   final _play = FocusNode(debugLabel: 'tv-player-play');
   final _episodes = FocusNode(debugLabel: 'tv-player-episodes');
   final _settings = FocusNode(debugLabel: 'tv-player-settings');
-  final _push = FocusNode(debugLabel: 'tv-player-push');
   final _progress = FocusNode(debugLabel: 'tv-player-progress');
   final _subscriptions = <StreamSubscription<dynamic>>[];
   Timer? _hideTimer;
@@ -238,14 +234,7 @@ class _TelevisionControlsState extends State<TelevisionControls> {
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }
-    for (final node in [
-      _surface,
-      _play,
-      _episodes,
-      _settings,
-      _progress,
-      _push,
-    ]) {
+    for (final node in [_surface, _play, _episodes, _settings, _progress]) {
       node.dispose();
     }
     super.dispose();
@@ -363,11 +352,6 @@ class _TelevisionControlsState extends State<TelevisionControls> {
                                 ),
                               ],
                             ),
-                            PlaybackBufferStatus(
-                              player: widget.player,
-                              enabled: widget.enabled,
-                            ),
-                            const SizedBox(height: 10),
                             Row(
                               children: [
                                 Text(
@@ -429,8 +413,9 @@ class _TelevisionControlsState extends State<TelevisionControls> {
                                 animation: widget.enhancement!,
                                 builder: (_, _) {
                                   final enhancement = widget.enhancement!;
-                                  if (!enhancement.canCompare)
+                                  if (!enhancement.canCompare) {
                                     return const SizedBox.shrink();
+                                  }
                                   return RemoteButton(
                                     key: const ValueKey(
                                       'tv-enhancement-compare',
@@ -446,15 +431,6 @@ class _TelevisionControlsState extends State<TelevisionControls> {
                                     },
                                   );
                                 },
-                              ),
-                            if (widget.onPush != null)
-                              RemoteButton(
-                                key: const ValueKey('tv-lan-push'),
-                                label: '推送',
-                                icon: Icons.cast_rounded,
-                                focusNode: _push,
-                                onPressed: () =>
-                                    _openPanel(widget.onPush!, _push),
                               ),
                             RemoteButton(
                               key: const ValueKey('tv-settings'),

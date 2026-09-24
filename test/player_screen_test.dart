@@ -1,6 +1,8 @@
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/models.dart';
 import 'package:duanju_app/player_screen.dart';
+import 'package:duanju_app/app_layout.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
@@ -19,9 +21,18 @@ void main() {
   Future<void> mount(
     WidgetTester tester,
     RouteRepository repository,
-    ScriptedPlayer platform,
-  ) async {
+    ScriptedPlayer platform, {
+    Size? size,
+    FakeViewPadding? padding,
+  }) async {
     SharedPreferences.setMockInitialValues({});
+    if (size != null) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+    }
+    if (padding != null) {
+      tester.view.padding = padding;
+    }
     final store = LocalStore(await SharedPreferences.getInstance());
     final detail = await repository.detail(FixtureRepository.free);
     await tester.pumpWidget(
@@ -43,6 +54,9 @@ void main() {
 
   Future<void> unmount(WidgetTester tester, ScriptedPlayer player) async {
     await tester.pumpWidget(const SizedBox.shrink());
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+    tester.view.resetPadding();
     await settleOperations(tester);
     expect(player.disposed, isTrue);
     expect(tester.takeException(), isNull);
@@ -54,7 +68,7 @@ void main() {
       final repository = RouteRepository();
       final player = ScriptedPlayer();
       await mount(tester, repository, player);
-      await tester.tap(find.byTooltip('播放倍速'));
+      await tester.tap(find.byKey(const ValueKey('player-speed')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('1.5x').last);
       await tester.pumpAndSettle();
@@ -62,7 +76,7 @@ void main() {
       await tester.pumpAndSettle();
       await player.seek(const Duration(seconds: 28));
       await tester.pump();
-      await tester.tap(find.byTooltip('暂停'));
+      await tester.tap(find.byTooltip('暂停播放'));
       await settleOperations(tester);
       player.fail();
       await tester.pump();
@@ -134,4 +148,107 @@ void main() {
       expect(repository.active, isEmpty);
     },
   );
+
+  testWidgets('picture-in-picture hides app overlay controls', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(AppDevice.channel, (call) async {
+      switch (call.method) {
+        case 'pictureInPictureStatus':
+          return {'supported': true, 'active': false};
+        case 'enterPictureInPicture':
+          return {'supported': true, 'active': true, 'requested': true};
+      }
+      return null;
+    });
+    try {
+      final repository = RouteRepository();
+      final player = ScriptedPlayer();
+      await mount(tester, repository, player, size: const Size(390, 844));
+      expect(
+        find.byKey(const ValueKey('player-picture-in-picture')),
+        findsOneWidget,
+      );
+      expect(find.text('选集'), findsOneWidget);
+      expect(find.text('简介'), findsOneWidget);
+      expect(find.text('下载'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('player-picture-in-picture')));
+      await tester.pump();
+      await tester.pump();
+      await settleOperations(tester);
+      expect(
+        find.byKey(const ValueKey('player-picture-in-picture')),
+        findsNothing,
+      );
+      expect(find.byKey(const ValueKey('player-speed')), findsNothing);
+      expect(find.byKey(const ValueKey('player-quality')), findsNothing);
+      expect(find.byKey(const ValueKey('player-progress')), findsNothing);
+      expect(find.text('选集'), findsNothing);
+      expect(find.text('简介'), findsNothing);
+      expect(find.text('下载'), findsNothing);
+      await unmount(tester, player);
+    } finally {
+      messenger.setMockMethodCallHandler(AppDevice.channel, null);
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('mobile player pane starts below the system status area', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final repository = RouteRepository();
+      final player = ScriptedPlayer();
+      await mount(
+        tester,
+        repository,
+        player,
+        size: const Size(390, 844),
+        padding: const FakeViewPadding(top: 32),
+      );
+      final surface = tester.getRect(
+        find.byKey(const ValueKey('player-gesture-surface')),
+      );
+      expect(surface.top, greaterThanOrEqualTo(32));
+      await unmount(tester, player);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view.resetPadding();
+    }
+  });
+
+  testWidgets('compact player tools stay clustered instead of evenly spread', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(AppDevice.channel, (call) async {
+      if (call.method == 'pictureInPictureStatus') {
+        return {'supported': true, 'active': false};
+      }
+      return null;
+    });
+    try {
+      final repository = RouteRepository();
+      final player = ScriptedPlayer();
+      await mount(tester, repository, player, size: const Size(390, 844));
+      final speed = tester.getRect(find.byKey(const ValueKey('player-speed')));
+      final quality = tester.getRect(
+        find.byKey(const ValueKey('player-quality')),
+      );
+      final pip = tester.getRect(
+        find.byKey(const ValueKey('player-picture-in-picture')),
+      );
+      expect(quality.left - speed.right, lessThan(8));
+      expect(pip.left - quality.right, lessThan(8));
+      expect(pip.right, greaterThan(330));
+      await unmount(tester, player);
+    } finally {
+      messenger.setMockMethodCallHandler(AppDevice.channel, null);
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
 }

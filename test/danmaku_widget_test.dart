@@ -161,12 +161,7 @@ void main() {
       current.result.complete(DanmakuFixtureRepository.page(current));
       await settle(tester);
       expect(find.text('合成弹幕 1002'), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('player-danmaku-settings')));
-      await settle(tester);
-      await tester.ensureVisible(
-        find.byKey(const ValueKey('player-danmaku-enabled')),
-      );
-      await tester.tap(find.byKey(const ValueKey('player-danmaku-enabled')));
+      await tester.tap(find.byKey(const ValueKey('player-danmaku-toggle')));
       await settle(tester);
       expect(store.playbackPreferences.danmaku, isFalse);
       expect(find.text('合成弹幕 1002'), findsNothing);
@@ -177,27 +172,21 @@ void main() {
   );
 
   testWidgets(
-    'danmaku failure and manual retry stay in its settings without interrupting playback',
+    'danmaku failure and manual retry stay on player controls without interrupting playback',
     (tester) async {
       final repository = DanmakuFixtureRepository()..failDanmaku = true;
       final player = ScriptedPlayer();
       await mount(tester, repository, player);
       expect(player.state.playing, isTrue);
       expect(find.text('暂时无法播放'), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('player-danmaku-settings')));
-      await settle(tester);
-      expect(find.text('弹幕暂不可用，可重试'), findsOneWidget);
       repository.failDanmaku = false;
-      await tester.ensureVisible(
-        find.byKey(const ValueKey('player-danmaku-retry')),
-      );
-      await tester.tap(find.byKey(const ValueKey('player-danmaku-retry')));
+      await tester.tap(find.byKey(const ValueKey('player-danmaku-toggle')));
       await settle(tester);
       expect(repository.danmakuCalls.length, 2);
       expect(repository.primaryCalls, 1);
       expect(repository.fallbackCalls, 0);
       expect(player.state.playing, isTrue);
-      expect(find.text('已载入 1 条弹幕'), findsOneWidget);
+      expect(find.text('合成弹幕 1001'), findsOneWidget);
       await unmount(tester, player);
     },
   );
@@ -207,11 +196,12 @@ void main() {
   ) async {
     final repository = DanmakuFixtureRepository()..local = true;
     final player = ScriptedPlayer();
-    await mount(tester, repository, player);
+    final store = await mount(tester, repository, player);
     expect(repository.danmakuCalls, isEmpty);
-    await tester.tap(find.byKey(const ValueKey('player-danmaku-settings')));
+    await tester.tap(find.byKey(const ValueKey('player-danmaku-toggle')));
     await settle(tester);
-    expect(find.text('本地播放不加载弹幕'), findsOneWidget);
+    expect(store.playbackPreferences.danmaku, isFalse);
+    expect(repository.danmakuCalls, isEmpty);
     await unmount(tester, player);
   });
 

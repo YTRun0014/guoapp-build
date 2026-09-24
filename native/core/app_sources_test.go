@@ -89,6 +89,39 @@ func TestSourceUpdatesPreservePagesOtherSourcesAndMetadata(t *testing.T) {
 	}
 }
 
+func TestYeguoSourceUpdateBatchesConfiguredPagesWithPost(t *testing.T) {
+	var pages []string
+	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host != "api.yeguo.test" || request.URL.Path != "/api/theater/exploreList" {
+			t.Fatalf("unexpected yeguo catalog request: %s", request.URL.String())
+		}
+		if request.Method != http.MethodPost {
+			t.Fatalf("yeguo catalog must use POST for pagination, got %s", request.Method)
+		}
+		if err := request.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		page := request.Form.Get("page")
+		pages = append(pages, page)
+		id := "90" + page
+		body := fmt.Sprintf(`{"status":"1","data":{"list":[{"video_id":%q,"title":"野果分页%s","description":"完整资料","episode_count":"6","serialize_status":"2"}],"page":%s,"limit":20,"total":60,"has_more":%q}}`, id, page, page, map[bool]string{true: "1", false: "0"}[page != "3"])
+		return sourceFixtureResponse(request, http.StatusOK, body), nil
+	})
+	engine.downloader.cfg.MaxPagesPerSort = 3
+	engine.downloader.yeguoClient().access = &yeguoAccess{base: "https://api.yeguo.test", identifier: "fixture-trace", loadedAt: time.Now()}
+
+	if err := engine.updateSource(context.Background(), sourceYeguo, "update"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(pages, ",") != "1,2,3" {
+		t.Fatalf("yeguo update did not batch configured pages: %v", pages)
+	}
+	page := engine.nativeCached(sourceYeguo)
+	if len(page.Items) != 3 || page.Page != 3 || page.HasMore {
+		t.Fatalf("wrong yeguo source cache after update: %+v", page)
+	}
+}
+
 func TestSourceJobsDeduplicateCancelAndRecoverAfterRestart(t *testing.T) {
 	if buildAllSources != "true" {
 		t.Skip("full edition source lifecycle")

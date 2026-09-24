@@ -14,6 +14,9 @@ import 'app_theme.dart';
 import 'core_bridge.dart';
 import 'danmaku_controller.dart';
 import 'danmaku_overlay.dart';
+import 'download_picker.dart';
+import 'downloads_screen.dart';
+import 'follow_state.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'playback_loader.dart';
@@ -101,6 +104,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _fullscreen = false;
   bool _automaticFullscreenSuppressed = false;
   bool _panelOpen = false;
+  int _mobileTab = 0;
   bool _autoAdvance = true;
   bool? _systemFullscreen;
   Orientation? _lastOrientation;
@@ -165,9 +169,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     final preferences = widget.store.playbackPreferences;
     _speed = preferences.speed;
     _requestedQuality = preferences.quality;
-    _autoAdvance = preferences.autoAdvance;
+    _autoAdvance = true;
     _danmakuEnabled = preferences.danmaku;
-    _preloadEnabled = preferences.preload;
+    _preloadEnabled = true;
     _loader = PlaybackLoader(widget.repository);
     _preloader = PlaybackPreloader(widget.repository);
     _danmaku = DanmakuController(widget.repository)
@@ -181,7 +185,14 @@ class _PlayerScreenState extends State<PlayerScreen>
             logLevel: MPVLogLevel.v,
           ),
         );
-    _video = widget.videoBuilder == null ? VideoController(_player) : null;
+    _video = widget.videoBuilder == null
+        ? VideoController(
+            _player,
+            configuration: VideoControllerConfiguration(
+              enableHardwareAcceleration: !Platform.isIOS,
+            ),
+          )
+        : null;
     _enhancement = VideoEnhancementController(
       player: _player,
       video: _video,
@@ -466,10 +477,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     final width = ratio >= 1 ? (1000 * ratio).round() : 1000;
     final height = ratio >= 1 ? 1000 : (1000 / ratio).round();
     _setPictureInPictureStatus(requested: true);
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _closed) return;
+    final sourceRect = _pictureInPictureSourceRect();
+    final arguments = <String, int>{'width': width, 'height': height};
+    if (sourceRect != null) arguments.addAll(sourceRect);
     try {
       final status = await AppDevice.channel.invokeMapMethod<String, dynamic>(
         'enterPictureInPicture',
-        {'width': width, 'height': height},
+        arguments,
       );
       if (!mounted || _closed) return;
       final supported = status?['supported'] == true;
@@ -499,6 +515,30 @@ class _PlayerScreenState extends State<PlayerScreen>
       _setPictureInPictureStatus(supported: false, requested: false);
       _notice('当前平台不支持画中画');
     }
+  }
+
+  Map<String, int>? _pictureInPictureSourceRect() {
+    final paneContext = _videoPaneKey.currentContext;
+    final renderObject = paneContext?.findRenderObject();
+    if (paneContext == null ||
+        renderObject is! RenderBox ||
+        !renderObject.hasSize) {
+      return null;
+    }
+    final topLeft = renderObject.localToGlobal(Offset.zero);
+    final size = renderObject.size;
+    final ratio =
+        MediaQuery.maybeOf(paneContext)?.devicePixelRatio ??
+        View.of(paneContext).devicePixelRatio;
+    final left = (topLeft.dx * ratio).round().clamp(0, 100000);
+    final top = (topLeft.dy * ratio).round().clamp(0, 100000);
+    final right = ((topLeft.dx + size.width) * ratio).round().clamp(0, 100000);
+    final bottom = ((topLeft.dy + size.height) * ratio).round().clamp(
+      0,
+      100000,
+    );
+    if (right <= left || bottom <= top) return null;
+    return {'left': left, 'top': top, 'right': right, 'bottom': bottom};
   }
 
   void _attachLanPlayback() {
@@ -1116,35 +1156,91 @@ class _PlayerScreenState extends State<PlayerScreen>
       throw StateError('当前用户已变更');
     }
     _interactions.cancel();
-    await widget.store.setPlaybackPreferences(preferences);
+    final nextPreferences = preferences.copyWith(
+      autoAdvance: true,
+      preload: true,
+    );
+    await widget.store.setPlaybackPreferences(nextPreferences);
     if (!mounted || _closed || widget.store.profileEpoch != _profileEpoch)
       return;
-    final qualityChanged = preferences.quality != _requestedQuality;
-    _enhancement.setPreferences(preferences.enhancement);
+    final qualityChanged = nextPreferences.quality != _requestedQuality;
+    _enhancement.setPreferences(nextPreferences.enhancement);
     setState(() {
-      _speed = preferences.speed;
-      _requestedQuality = preferences.quality;
-      _autoAdvance = preferences.autoAdvance;
-      _danmakuEnabled = preferences.danmaku;
-      _preloadEnabled = preferences.preload;
+      _speed = nextPreferences.speed;
+      _requestedQuality = nextPreferences.quality;
+      _autoAdvance = true;
+      _danmakuEnabled = nextPreferences.danmaku;
+      _preloadEnabled = true;
     });
     _danmaku.setEnabled(_danmakuEnabled);
     _syncDanmaku();
-    if (qualityChanged || !_preloadEnabled) _preloader.clear();
+    if (qualityChanged) _preloader.clear();
     _syncPreload();
     _menuRevision.value++;
     await _interactions.applySpeed();
     if (qualityChanged && _plan?.local != true) {
-      await _retry(quality: preferences.quality);
+      await _retry(quality: nextPreferences.quality);
     }
   }
 
   Future<void> _toggleFavorite() async {
     try {
       await widget.store.toggleFavorite(widget.detail.drama);
+      if (mounted && !_closed) setState(() {});
     } catch (_) {
       _notice('追剧记录未能保存，请检查存储空间后重试');
     }
+  }
+
+  Future<void> _toggleDanmaku() async {
+    if (widget.detail.drama.source != 'hongguo') return;
+    try {
+      await _setPreferences(_preferences.copyWith(danmaku: !_danmakuEnabled));
+    } catch (_) {
+      _notice('弹幕偏好未能保存，请重试');
+    }
+  }
+
+  Future<void> _retryDanmakuFromControls() async {
+    try {
+      _danmaku.retry();
+      _menuRevision.value++;
+    } catch (_) {
+      _notice('弹幕重试失败，请稍后再试');
+    }
+  }
+
+  Future<void> _submitDownloadSelection(DownloadSelection selection) async {
+    if (!widget.repository.supportsDownloads ||
+        !widget.store.canDownload ||
+        widget.store.profileEpoch != _profileEpoch ||
+        widget.mediaId != null) {
+      return;
+    }
+    final added = await widget.repository.enqueueDownloads(
+      widget.detail,
+      selection.episodes,
+      quality: selection.quality,
+    );
+    if (!mounted || _closed) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(added == 0 ? '所选集数已在下载列表中' : '已加入 $added 集，已有任务自动跳过'),
+        action: SnackBarAction(
+          label: '查看',
+          onPressed: () {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => DownloadsScreen(
+                  repository: widget.repository,
+                  store: widget.store,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _openPanel(PlayerMenuSection section) async {
@@ -1299,9 +1395,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         _preferences.copyWith(
           speed: selection.speed,
           quality: selection.quality,
-          autoAdvance: selection.autoAdvance,
+          autoAdvance: true,
           danmaku: selection.danmaku,
-          preload: selection.preload,
+          preload: true,
           enhancement: selection.enhancement,
         ),
       );
@@ -1393,8 +1489,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   Widget _buildPlayer(BuildContext context) {
     final theme = Theme.of(context);
     final title = widget.detail.drama.title;
-    final episode = widget.detail.episodes[_index];
     final fullscreen = _showFullscreen;
+    final pictureInPicture = _pictureInPictureVisible;
     return PopScope(
       canPop: _television || !fullscreen,
       onPopInvokedWithResult: (didPop, result) {
@@ -1422,10 +1518,10 @@ class _PlayerScreenState extends State<PlayerScreen>
           canRequestFocus: !_television,
           skipTraversal: _television,
           child: Scaffold(
-            backgroundColor: fullscreen
+            backgroundColor: fullscreen || pictureInPicture
                 ? Colors.black
                 : theme.scaffoldBackgroundColor,
-            appBar: fullscreen
+            appBar: pictureInPicture || fullscreen || _mobile
                 ? null
                 : AppBar(
                     title: Text(
@@ -1441,68 +1537,65 @@ class _PlayerScreenState extends State<PlayerScreen>
                       ),
                     ],
                   ),
-            body: SafeArea(
-              top: false,
-              bottom: !fullscreen,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final desktop = constraints.maxWidth >= 840;
-                  if (fullscreen) {
-                    return _videoPane(context);
-                  }
-                  if (desktop ||
-                      constraints.maxWidth > constraints.maxHeight * 1.3) {
-                    return Row(
-                      children: [
-                        Expanded(
-                          child: Column(
+            body: pictureInPicture
+                ? _videoPane(context)
+                : SafeArea(
+                    top: !_television && (fullscreen || _mobile),
+                    bottom: !fullscreen,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final desktop = constraints.maxWidth >= 840;
+                        if (fullscreen) {
+                          return _videoPane(context);
+                        }
+                        if (desktop ||
+                            constraints.maxWidth >
+                                constraints.maxHeight * 1.3) {
+                          return Row(
                             children: [
-                              Expanded(child: _videoPane(context)),
-                              _actionBar(episode),
+                              Expanded(
+                                child: Column(
+                                  children: [
+                                    Expanded(child: _videoPane(context)),
+                                  ],
+                                ),
+                              ),
+                              SizedBox(
+                                width: desktop ? 312 : 210,
+                                child: _episodePanel(),
+                              ),
                             ],
-                          ),
-                        ),
-                        SizedBox(
-                          width: desktop ? 312 : 210,
-                          child: _episodePanel(),
-                        ),
-                      ],
-                    );
-                  }
-                  if (_mobile) {
-                    final height = (constraints.maxWidth / _aspectRatio).clamp(
-                      0.0,
-                      constraints.maxHeight * .58,
-                    );
-                    return Column(
-                      children: [
-                        SizedBox(
-                          height: height,
-                          width: double.infinity,
-                          child: _videoPane(context),
-                        ),
-                        Expanded(child: _mobilePlaybackPanel(episode)),
-                      ],
-                    );
-                  }
-                  final height = (constraints.maxWidth / _aspectRatio).clamp(
-                    0.0,
-                    constraints.maxHeight * .64,
-                  );
-                  return Column(
-                    children: [
-                      SizedBox(
-                        height: height,
-                        width: double.infinity,
-                        child: _videoPane(context),
-                      ),
-                      _actionBar(episode),
-                      Expanded(child: _episodePanel()),
-                    ],
-                  );
-                },
-              ),
-            ),
+                          );
+                        }
+                        if (_mobile) {
+                          final height = (constraints.maxWidth / _aspectRatio)
+                              .clamp(0.0, constraints.maxHeight * .56);
+                          return Column(
+                            children: [
+                              SizedBox(
+                                height: height,
+                                width: double.infinity,
+                                child: _videoPane(context),
+                              ),
+                              Expanded(child: _mobilePlaybackPanel()),
+                            ],
+                          );
+                        }
+                        final height = (constraints.maxWidth / _aspectRatio)
+                            .clamp(0.0, constraints.maxHeight * .64);
+                        return Column(
+                          children: [
+                            SizedBox(
+                              height: height,
+                              width: double.infinity,
+                              child: _videoPane(context),
+                            ),
+                            Expanded(child: _episodePanel()),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
           ),
         ),
       ),
@@ -1515,7 +1608,10 @@ class _PlayerScreenState extends State<PlayerScreen>
         : AppTheme.dark;
     final title =
         '${widget.detail.drama.title} · 第 ${widget.detail.episodes[_index].number} 集${_plan?.local == true ? ' · 本地' : ''}${widget.detail.episodes[_index].vip ? ' · VIP 试看' : ''}${(_plan?.routeIndex ?? 0) > 0 ? ' · 线路 ${_plan!.routeIndex + 1}' : ''}';
-    final Widget controls = _television
+    final hideOverlayForPictureInPicture = _pictureInPictureVisible;
+    final Widget controls = hideOverlayForPictureInPicture
+        ? const SizedBox.shrink()
+        : _television
         ? TelevisionControls(
             player: _player,
             title: title,
@@ -1531,7 +1627,6 @@ class _PlayerScreenState extends State<PlayerScreen>
             onEpisodes: () => _televisionEpisodes(context),
             onSettings: () => _televisionSettings(context),
             onBack: _back,
-            onPush: widget.mediaId == null ? _pushToDevice : null,
           )
         : PlayerControls(
             player: _player,
@@ -1545,14 +1640,23 @@ class _PlayerScreenState extends State<PlayerScreen>
             onTogglePlayback: _togglePlayback,
             swipeEnabled: _mobile,
             onFullscreen: _rotate,
+            onBack: _back,
             onFocusSurface: _playerFocus.requestFocus,
             onSeek: _seekTo,
             speed: _speed,
             qualityLabel: _qualityLabel,
+            showDanmaku: widget.detail.drama.source == 'hongguo',
+            danmakuEnabled: _danmakuEnabled,
+            danmakuStatus: _danmaku.status,
             onEpisodes: () => _openPanel(PlayerMenuSection.episodes),
             onSpeed: () => _openPanel(PlayerMenuSection.speed),
             onQuality: () => _openPanel(PlayerMenuSection.quality),
-            onSettings: () => _openPanel(PlayerMenuSection.settings),
+            onDanmaku: widget.detail.drama.source == 'hongguo'
+                ? _toggleDanmaku
+                : null,
+            onRetryDanmaku: _danmaku.canRetry
+                ? _retryDanmakuFromControls
+                : null,
             onPush: widget.mediaId == null ? _pushToDevice : null,
             onPictureInPicture: _canUsePictureInPicture
                 ? _enterPictureInPicture
@@ -1565,7 +1669,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     final layeredControls = Stack(
       fit: StackFit.expand,
       children: [
-        DanmakuOverlay(controller: _danmaku, aspectRatio: _aspectRatio),
+        if (!hideOverlayForPictureInPicture)
+          DanmakuOverlay(controller: _danmaku, aspectRatio: _aspectRatio),
         controls,
       ],
     );
@@ -1595,7 +1700,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                   fit: BoxFit.contain,
                   controls: (_) => layeredControls,
                 ),
-              if (_loading)
+              if (_loading && !hideOverlayForPictureInPicture)
                 ColoredBox(
                   color: Colors.black.withValues(alpha: .78),
                   child: Center(
@@ -1609,7 +1714,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                     ),
                   ),
                 ),
-              if (_error != null)
+              if (_error != null && !hideOverlayForPictureInPicture)
                 ColoredBox(
                   color: Colors.black.withValues(alpha: .9),
                   child: StatusPanel(
@@ -1636,6 +1741,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                   ),
                 ),
               if ((_loading || _error != null) &&
+                  !hideOverlayForPictureInPicture &&
                   _showFullscreen &&
                   !_television)
                 SafeArea(
@@ -1654,17 +1760,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                               _openPanel(PlayerMenuSection.episodes),
                           child: const Text('选集'),
                         ),
-                        IconButton(
-                          tooltip: '播放设置',
-                          onPressed: () =>
-                              _openPanel(PlayerMenuSection.settings),
-                          icon: const Icon(Icons.tune_rounded),
-                        ),
                       ],
                     ),
                   ),
                 ),
-              if (_saveWarning != null)
+              if (_saveWarning != null && !hideOverlayForPictureInPicture)
                 Positioned(
                   top: 52,
                   left: 12,
@@ -1700,190 +1800,27 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
-  Widget _actionBar(Episode episode) => Container(
-    color: Theme.of(context).colorScheme.surfaceContainer,
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-    child: LayoutBuilder(
-      builder: (context, constraints) => Row(
-        children: [
-          IconButton(
-            tooltip: '上一集',
-            onPressed: _index > 0 ? () => _play(_index - 1) : null,
-            icon: const Icon(Icons.skip_previous_rounded),
-          ),
-          Flexible(
-            child: TextButton(
-              onPressed: () => _openPanel(PlayerMenuSection.episodes),
-              child: Text(
-                '第 ${episode.number} 集 ▾',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ),
-          IconButton(
-            tooltip: '下一集',
-            onPressed: _index + 1 < widget.detail.episodes.length
-                ? () => _play(_index + 1)
-                : null,
-            icon: const Icon(Icons.skip_next_rounded),
-          ),
-          const Spacer(),
-          if (constraints.maxWidth >= 440)
-            TextButton(
-              onPressed: () => _openPanel(PlayerMenuSection.speed),
-              child: Text('${_speed}x'),
-            ),
-          if (constraints.maxWidth >= 560)
-            TextButton(
-              onPressed: () => _openPanel(PlayerMenuSection.quality),
-              child: Text(_qualityLabel),
-            ),
-          if (widget.mediaId == null)
-            LanPushButton(
-              key: const ValueKey('player-lan-push'),
-              onPressed: _loading || _error != null ? null : _pushToDevice,
-            ),
-          IconButton(
-            key: const ValueKey('player-danmaku-settings'),
-            tooltip: '播放设置 · 倍速、画质与弹幕',
-            onPressed: () => _openPanel(PlayerMenuSection.settings),
-            icon: const Icon(Icons.tune_rounded),
-          ),
-        ],
-      ),
-    ),
-  );
-
-  Widget _mobilePlaybackPanel(Episode episode) {
+  Widget _mobilePlaybackPanel() {
     final colors = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-    final total = widget.detail.episodes.length;
-    final canPrevious = _index > 0;
-    final canNext = _index + 1 < total;
     return ColoredBox(
       color: Theme.of(context).scaffoldBackgroundColor,
       child: SafeArea(
         top: false,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+        child: Column(
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.detail.drama.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: text.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '第 ${episode.number} 集 / 共 $total 集',
-                        style: text.bodySmall?.copyWith(
-                          color: colors.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  tooltip: '播放设置',
-                  onPressed: () => _openPanel(PlayerMenuSection.settings),
-                  icon: const Icon(Icons.tune_rounded),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Material(
-              color: colors.surfaceContainer,
-              borderRadius: BorderRadius.circular(8),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () => _openPanel(PlayerMenuSection.episodes),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.grid_view_rounded,
-                        color: colors.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          '选集',
-                          style: text.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      Text(
-                        '当前第 ${episode.number} 集',
-                        style: text.bodySmall?.copyWith(
-                          color: colors.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      const Icon(Icons.expand_more_rounded),
-                    ],
-                  ),
+            _mobileTabs(colors),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: _mobileTab == 0
+                      ? _episodePanel(compact: true)
+                      : _mobileTab == 1
+                      ? _mobileSynopsis()
+                      : _mobileDownload(),
                 ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: canPrevious ? () => _play(_index - 1) : null,
-                    icon: const Icon(Icons.skip_previous_rounded),
-                    label: const Text('上一集'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: canNext ? () => _play(_index + 1) : null,
-                    icon: const Icon(Icons.skip_next_rounded),
-                    label: const Text('下一集'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                ActionChip(
-                  avatar: const Icon(Icons.speed_rounded, size: 18),
-                  label: Text('${_speed}x'),
-                  onPressed: () => _openPanel(PlayerMenuSection.speed),
-                ),
-                ActionChip(
-                  avatar: const Icon(Icons.high_quality_rounded, size: 18),
-                  label: Text(_qualityLabel),
-                  onPressed: () => _openPanel(PlayerMenuSection.quality),
-                ),
-                if (widget.mediaId == null)
-                  ActionChip(
-                    key: const ValueKey('player-lan-push-compact'),
-                    avatar: const Icon(Icons.cast_rounded, size: 18),
-                    label: const Text('推送'),
-                    onPressed: _loading || _error != null
-                        ? null
-                        : () => unawaited(_pushToDevice()),
-                  ),
-              ],
             ),
           ],
         ),
@@ -1891,11 +1828,223 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
-  Widget _episodePanel() => ColoredBox(
+  Widget _mobileTabs(ColorScheme colors) => Padding(
+    padding: const EdgeInsets.fromLTRB(8, 2, 8, 0),
+    child: SizedBox(
+      height: 42,
+      child: Row(
+        children: [
+          _mobileTabButton(0, '选集'),
+          _mobileTabButton(1, '简介'),
+          _mobileTabButton(2, '下载'),
+        ],
+      ),
+    ),
+  );
+
+  Widget _mobileTabButton(int value, String label) {
+    final selected = _mobileTab == value;
+    final colors = Theme.of(context).colorScheme;
+    return Expanded(
+      child: InkWell(
+        onTap: () => setState(() => _mobileTab = value),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: selected ? colors.primary : Colors.transparent,
+                width: 2,
+              ),
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? colors.onSurface : colors.onSurfaceVariant,
+              fontSize: 13,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _mobileSynopsis() {
+    final drama = widget.detail.drama;
+    final colors = Theme.of(context).colorScheme;
+    final meta = [
+      SourceSite.byId(drama.source).name,
+      if (drama.episodes > 0) '共 ${drama.episodes} 集',
+      if (drama.releaseStatus.isNotEmpty && drama.releaseStatus != 'unknown')
+        drama.releaseLabel,
+      if (drama.category.isNotEmpty) drama.category,
+    ];
+    final body = drama.description.trim().isEmpty ? '暂无简介' : drama.description;
+    return ColoredBox(
+      color: colors.surface,
+      child: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 82,
+                height: 123,
+                child: DramaCover(drama: drama, repository: widget.repository),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      drama.title,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (meta.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        meta.join(' · '),
+                        style: TextStyle(color: colors.onSurfaceVariant),
+                      ),
+                    ],
+                    if (drama.onlineDate.isNotEmpty ||
+                        drama.heat.isNotEmpty ||
+                        drama.views.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        [
+                          if (drama.onlineDate.isNotEmpty)
+                            '${drama.onlineDate} 上线',
+                          if (drama.heat.isNotEmpty) '热度 ${drama.heat}',
+                          if (drama.views.isNotEmpty) '播放 ${drama.views}',
+                        ].join(' · '),
+                        style: TextStyle(color: colors.onSurfaceVariant),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _mobileFollowControl(drama),
+          if (drama.tags.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final tag in drama.tags.take(12))
+                  Chip(label: Text(tag), visualDensity: VisualDensity.compact),
+              ],
+            ),
+          ],
+          const SizedBox(height: 12),
+          Text(body, style: const TextStyle(height: 1.55)),
+          if (widget.detail.warning.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(widget.detail.warning, style: TextStyle(color: colors.error)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _mobileFollowControl(Drama drama) {
+    final state = widget.store.following(drama.id);
+    return PopupMenuButton<String>(
+      key: const ValueKey('player-follow-status'),
+      tooltip: '追剧与观看状态',
+      onSelected: (value) async {
+        if (_profileEpoch != widget.store.profileEpoch) return;
+        if (value == 'remove') {
+          await saveUserChange(
+            context,
+            () => widget.store.toggleFavorite(drama),
+          );
+        } else {
+          final status = FollowStatus.values.firstWhere(
+            (status) => status.name == value,
+          );
+          await saveUserChange(
+            context,
+            () => widget.store.setFollowStatus(drama, status),
+          );
+        }
+        if (mounted && !_closed) setState(() {});
+      },
+      itemBuilder: (_) => [
+        for (final status in FollowStatus.values)
+          CheckedPopupMenuItem(
+            value: status.name,
+            checked: state?.status == status,
+            child: Text(status.label),
+          ),
+        if (state != null)
+          const PopupMenuItem(value: 'remove', child: Text('取消追剧')),
+      ],
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 36),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: state == null
+              ? Theme.of(context).colorScheme.surfaceContainerHighest
+              : Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              state == null
+                  ? Icons.bookmark_add_outlined
+                  : Icons.bookmark_rounded,
+              size: 18,
+            ),
+            const SizedBox(width: 6),
+            Text(state?.label ?? '加入追剧'),
+            const SizedBox(width: 2),
+            const Icon(Icons.expand_more_rounded, size: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _mobileDownload() {
+    final colors = Theme.of(context).colorScheme;
+    if (!widget.repository.supportsDownloads || !widget.store.canDownload) {
+      return ColoredBox(
+        color: colors.surface,
+        child: const StatusPanel(
+          title: '下载不可用',
+          message: '当前用户或当前环境未开放本地下载。',
+          icon: Icons.download_outlined,
+        ),
+      );
+    }
+    return DownloadPicker(
+      detail: widget.detail,
+      preferences: widget.store.downloadPreferences,
+      embedded: true,
+      onSubmit: _submitDownloadSelection,
+    );
+  }
+
+  Widget _episodePanel({bool compact = false}) => ColoredBox(
     color: Theme.of(context).colorScheme.surface,
     child: PlayerEpisodeGrid(
       episodes: widget.detail.episodes,
       currentIndex: _index,
+      compact: compact,
+      title: compact ? '剧集' : '选集',
       onSelected: (index) => _play(index),
     ),
   );

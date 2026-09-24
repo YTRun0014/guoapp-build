@@ -272,7 +272,7 @@ void main() {
         isFalse,
       );
       expect(find.text('选集'), findsOneWidget);
-      expect(find.byKey(const ValueKey('play-episode-1')), findsNothing);
+      expect(find.byKey(const ValueKey('play-episode-1')), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
       for (var i = 0; i < 12; i++) {
         await tester.pump(const Duration(milliseconds: 10));

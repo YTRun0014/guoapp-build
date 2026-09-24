@@ -15,6 +15,7 @@ import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.graphics.Rect
 import android.net.ConnectivityManager
 import android.net.Uri
 import android.util.Rational
@@ -157,7 +158,14 @@ class MainActivity : FlutterActivity() {
                         "enterPictureInPicture" -> {
                             val width = call.argument<Int>("width") ?: 16
                             val height = call.argument<Int>("height") ?: 9
-                            result.success(enterPlayerPictureInPicture(width, height))
+                            result.success(enterPlayerPictureInPicture(
+                                width,
+                                height,
+                                call.argument<Int>("left"),
+                                call.argument<Int>("top"),
+                                call.argument<Int>("right"),
+                                call.argument<Int>("bottom")
+                            ))
                         }
                         else -> result.notImplemented()
                     }
@@ -177,13 +185,24 @@ class MainActivity : FlutterActivity() {
         )
     }
 
-    private fun enterPlayerPictureInPicture(width: Int, height: Int): Map<String, Any> {
+    private fun enterPlayerPictureInPicture(
+        width: Int,
+        height: Int,
+        left: Int?,
+        top: Int?,
+        right: Int?,
+        bottom: Int?
+    ): Map<String, Any> {
         if (!pictureInPictureSupported()) return pictureInPictureStatus()
         val safeWidth = width.coerceIn(1, 10000)
         val safeHeight = height.coerceIn(1, 10000)
         return runCatching {
             val builder = PictureInPictureParams.Builder()
             builder.setAspectRatio(Rational(safeWidth, safeHeight))
+            if (left != null && top != null && right != null && bottom != null &&
+                right > left && bottom > top) {
+                builder.setSourceRectHint(Rect(left, top, right, bottom))
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 builder.setAutoEnterEnabled(true)
             }

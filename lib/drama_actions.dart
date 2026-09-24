@@ -30,12 +30,8 @@ Future<void> showDramaActions(
           FollowStatus.watched => Icons.check_circle_outline,
         },
       ),
-    if (following != null && following.newEpisodes > 0)
-      (
-        'read',
-        '标记 ${following.newEpisodes} 集更新已读',
-        Icons.mark_email_read_outlined,
-      ),
+    if (following != null && following.hasUpdates)
+      ('read', '标记 ${following.updateLabel}已读', Icons.mark_email_read_outlined),
     if (onDownload != null && store.canDownload)
       ('download', '下载选集', Icons.download_outlined),
     if (onSelect != null && store.canDownload)

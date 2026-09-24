@@ -44,7 +44,21 @@ class FixtureRepository extends AppRepository {
     if (fail) {
       throw AppFailure('合成网络错误');
     }
-    return CatalogPage([free, vip], page: page);
+    return CatalogPage(
+      [
+        free,
+        vip,
+        Drama(
+          id: '$source:auto-$page',
+          source: source,
+          title: '第$page页短剧',
+          episodes: 1,
+          category: '合成数据',
+        ),
+      ],
+      page: page,
+      hasMore: page < 5,
+    );
   }
 
   @override

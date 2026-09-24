@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:duanju_app/core_bridge.dart';
 import 'package:duanju_app/models.dart';
@@ -82,6 +83,10 @@ class LibraryFeatureRepository extends FixtureRepository {
   bool get supportsDownloads => true;
 
   @override
+  Future<String> cover(Drama drama, {bool force = false}) async =>
+      File('test/fixtures/cover.png').absolute.path;
+
+  @override
   Future<SourceStatus> sourceStatus(String source) async =>
       statuses[source] ?? SourceStatus.fromJson({'source': source});
 
@@ -129,7 +134,8 @@ class LibraryFeatureRepository extends FixtureRepository {
     detailRequests.add(drama.id);
     if (detailFailures.contains(drama.id)) throw AppFailure('合成分集读取失败');
     if (pendingDetail != null) return pendingDetail!.future;
-    return details[drama.id] ?? makeDetail(drama, 2);
+    return details[drama.id] ??
+        makeDetail(drama, drama.episodes.clamp(1, 2).toInt());
   }
 
   @override

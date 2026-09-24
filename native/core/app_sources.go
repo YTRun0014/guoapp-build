@@ -282,35 +282,22 @@ func (engine *nativeEngine) updateSource(ctx context.Context, source, operation 
 	}()
 	if operation == "update" {
 		engine.changeSourceRecord(source, func(record *nativeSourceRecord) { record.Stage = "查找新剧" })
-		page, err := engine.nativeCatalog(ctx, nativeInput{Source: source, Page: 1, Force: true})
-		if err != nil {
+		if err := engine.loadSourceCatalogPage(ctx, source, 1); err != nil {
 			return err
 		}
-		if page.Warning != "" {
-			if page.saveError != nil {
-				return page.saveError
-			}
-			return errors.New(page.Warning)
-		}
 	}
-	if operation == "more" || operation == "update" && before.HasMore && len(before.Items) > 0 {
+	if operation == "more" || operation == "update" {
 		engine.changeSourceRecord(source, func(record *nativeSourceRecord) { record.Stage = "继续加载历史分页" })
-		current := engine.nativeCached(source)
-		if current.HasMore {
-			next := current.Page + 1
-			if len(current.Items) == 0 {
-				next = 1
+		limit := 1
+		if operation == "update" {
+			maxPages := engine.downloader.cfg.MaxPagesPerSort
+			if maxPages <= 0 {
+				maxPages = defaultConfig().MaxPagesPerSort
 			}
-			page, err := engine.nativeCatalog(ctx, nativeInput{Source: source, Page: next, Force: true})
-			if err != nil {
-				return err
-			}
-			if page.Warning != "" {
-				if page.saveError != nil {
-					return page.saveError
-				}
-				return errors.New(page.Warning)
-			}
+			limit = max(0, maxPages-1)
+		}
+		if err := engine.loadMoreSourceCatalogPages(ctx, source, limit); err != nil {
+			return err
 		}
 	}
 	if operation == "more" {
@@ -420,4 +407,41 @@ func (engine *nativeEngine) updateSource(ctx context.Context, source, operation 
 		}
 	}
 	return errors.Join(failures...)
+}
+
+func (engine *nativeEngine) loadSourceCatalogPage(ctx context.Context, source string, page int) error {
+	result, err := engine.nativeCatalog(ctx, nativeInput{Source: source, Page: page, Force: true})
+	if err != nil {
+		return err
+	}
+	if result.Warning != "" {
+		if result.saveError != nil {
+			return result.saveError
+		}
+		return errors.New(result.Warning)
+	}
+	return nil
+}
+
+func (engine *nativeEngine) loadMoreSourceCatalogPages(ctx context.Context, source string, limit int) error {
+	if limit <= 0 {
+		return nil
+	}
+	for loaded := 0; loaded < limit; loaded++ {
+		current := engine.nativeCached(source)
+		if !current.HasMore {
+			return nil
+		}
+		page := current.Page + 1
+		if len(current.Items) == 0 {
+			page = 1
+		}
+		if page > 1000000 {
+			return errors.New("站源分页已达到接口范围，已保留目录位置")
+		}
+		if err := engine.loadSourceCatalogPage(ctx, source, page); err != nil {
+			return err
+		}
+	}
+	return nil
 }

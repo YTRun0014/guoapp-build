@@ -154,6 +154,7 @@ class EpisodeBrowser extends StatefulWidget {
     this.selectedNumbers,
     this.keyPrefix = 'episode',
     this.title = '选集',
+    this.compact = false,
   });
   final List<Episode> episodes;
   final ValueChanged<int> onSelected;
@@ -161,6 +162,7 @@ class EpisodeBrowser extends StatefulWidget {
   final Set<int>? selectedNumbers;
   final String keyPrefix;
   final String title;
+  final bool compact;
   @override
   State<EpisodeBrowser> createState() => _EpisodeBrowserState();
 }
@@ -168,12 +170,13 @@ class EpisodeBrowser extends StatefulWidget {
 class _EpisodeBrowserState extends State<EpisodeBrowser> {
   final _scroll = ScrollController();
   String _layout = '';
+  int get _pageSize => episodePageSize;
   late int _page =
       max(
         0,
         widget.episodes.indexWhere((e) => e.number == widget.currentNumber),
       ) ~/
-      episodePageSize;
+      _pageSize;
   int? _located;
 
   @override
@@ -187,13 +190,10 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
               (episode) => episode.number == widget.currentNumber,
             ),
           ) ~/
-          episodePageSize;
+          _pageSize;
       _located = null;
     }
-    _page = _page.clamp(
-      0,
-      max(0, (widget.episodes.length - 1) ~/ episodePageSize),
-    );
+    _page = _page.clamp(0, max(0, (widget.episodes.length - 1) ~/ _pageSize));
   }
 
   @override
@@ -204,8 +204,11 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
 
   @override
   Widget build(BuildContext context) {
-    final start = _page * episodePageSize;
-    final visible = widget.episodes.skip(start).take(episodePageSize).toList();
+    if (widget.compact) return _continuousGrid(context);
+    final pageSize = _pageSize;
+    _page = _page.clamp(0, max(0, (widget.episodes.length - 1) ~/ pageSize));
+    final start = _page * pageSize;
+    final visible = widget.episodes.skip(start).take(pageSize).toList();
     final television = AppLayout.isTelevision(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -230,14 +233,25 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
               );
               final scale = MediaQuery.textScalerOf(context);
               final columns =
-                  ((constraints.maxWidth - 36) /
+                  ((constraints.maxWidth - (widget.compact ? 8 : 36)) /
                           max(
-                            television ? 100 : 82,
-                            scale.scale(20) * digits * .65 + 40,
+                            widget.compact
+                                ? 64
+                                : television
+                                ? 100
+                                : 82,
+                            scale.scale(widget.compact ? 18 : 20) *
+                                    digits *
+                                    .65 +
+                                (widget.compact ? 28 : 40),
                           ))
                       .floor()
-                      .clamp(1, 12);
-              final extent = max(56.0, scale.scale(20) + 30);
+                      .clamp(widget.compact ? 4 : 1, 12);
+              final extent = max(
+                widget.compact ? 46.0 : 56.0,
+                scale.scale(widget.compact ? 18 : 20) +
+                    (widget.compact ? 24 : 30),
+              );
               final target = max(
                 0,
                 visible.indexWhere(
@@ -272,17 +286,20 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
                     .toList(),
                 columns: columns,
                 itemExtent: extent,
-                spacing: 8,
+                spacing: widget.compact ? 6 : 8,
+                padding: widget.compact
+                    ? const EdgeInsets.fromLTRB(4, 4, 4, 12)
+                    : const EdgeInsets.fromLTRB(18, 2, 18, 18),
                 itemBuilder: (_, index, node, onFocus) {
                   final episode = visible[index];
                   return RemoteEpisodeButton(
                     key: ValueKey('${widget.keyPrefix}-${episode.number}'),
                     number: episode.number,
                     vip: episode.vip,
+                    compact: widget.compact,
                     current:
                         widget.selectedNumbers?.contains(episode.number) ??
-                        (episode.number == widget.currentNumber ||
-                            episode.number == _located),
+                        episode.number == widget.currentNumber,
                     focusNode: node,
                     onFocus: onFocus,
                     onPressed: () => widget.onSelected(start + index),
@@ -295,4 +312,121 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
       ],
     );
   }
+
+  Widget _compactRangeSelector({required int target, required int pageCount}) {
+    if (pageCount <= 1) return const SizedBox.shrink();
+    final colors = Theme.of(context).colorScheme;
+    final selectedPage = (target ~/ episodePageSize).clamp(0, pageCount - 1);
+    return SizedBox(
+      height: 34,
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(4, 2, 4, 3),
+        scrollDirection: Axis.horizontal,
+        itemCount: pageCount,
+        separatorBuilder: (_, _) => const SizedBox(width: 6),
+        itemBuilder: (context, page) {
+          final start = page * episodePageSize;
+          final end = min(start + episodePageSize, widget.episodes.length) - 1;
+          final selected = page == selectedPage;
+          return OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(0, 28),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              foregroundColor: selected ? colors.onPrimary : colors.onSurface,
+              backgroundColor: selected ? colors.primary : Colors.transparent,
+              side: BorderSide(
+                color: selected ? colors.primary : colors.outlineVariant,
+              ),
+              textStyle: const TextStyle(fontSize: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(7),
+              ),
+            ),
+            onPressed: () {
+              setState(() {
+                _located = widget.episodes[start].number;
+              });
+            },
+            child: Text(
+              '${widget.episodes[start].number}-${widget.episodes[end].number}',
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _continuousGrid(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final television = AppLayout.isTelevision(context);
+      final scale = MediaQuery.textScalerOf(context);
+      final digits = widget.episodes.fold<int>(
+        1,
+        (value, episode) => max(value, episode.number.toString().length),
+      );
+      final minimum = max(40.0, scale.scale(14) * digits * .62 + 22);
+      final columns = ((constraints.maxWidth - 12) / minimum).floor().clamp(
+        5,
+        television ? 12 : 10,
+      );
+      final extent = max(34.0, scale.scale(14) + 18);
+      final target = max(
+        0,
+        widget.episodes.indexWhere(
+          (episode) => episode.number == (_located ?? widget.currentNumber),
+        ),
+      );
+      final pageCount = (widget.episodes.length / episodePageSize).ceil();
+      final layout =
+          'compact:${widget.episodes.length}:$_located:${widget.currentNumber}:$columns:$extent:${constraints.maxHeight}';
+      if (layout != _layout) {
+        _layout = layout;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_scroll.hasClients || _layout != layout) return;
+          _scroll.jumpTo(
+            (target ~/ columns * (extent + 6) -
+                    constraints.maxHeight / 2 +
+                    extent / 2)
+                .clamp(0.0, _scroll.position.maxScrollExtent),
+          );
+        });
+      }
+      return Column(
+        children: [
+          _compactRangeSelector(target: target, pageCount: pageCount),
+          Expanded(
+            child: RemoteGrid(
+              key: ValueKey('episode-continuous-$_located'),
+              controller: _scroll,
+              autofocus: television && _located != null,
+              initialIndex: target,
+              itemKeys: widget.episodes
+                  .map((episode) => '${episode.number}')
+                  .toList(),
+              columns: columns,
+              itemExtent: extent,
+              spacing: 5,
+              padding: const EdgeInsets.fromLTRB(4, 6, 4, 4),
+              itemBuilder: (_, index, node, onFocus) {
+                final episode = widget.episodes[index];
+                return RemoteEpisodeButton(
+                  key: ValueKey('${widget.keyPrefix}-${episode.number}'),
+                  number: episode.number,
+                  vip: episode.vip,
+                  compact: true,
+                  current:
+                      widget.selectedNumbers?.contains(episode.number) ??
+                      episode.number == widget.currentNumber,
+                  focusNode: node,
+                  onFocus: onFocus,
+                  onPressed: () => widget.onSelected(index),
+                );
+              },
+            ),
+          ),
+        ],
+      );
+    },
+  );
 }

@@ -13,6 +13,7 @@ import 'catalog_sort_sheet.dart';
 import 'recommendations_screen.dart';
 import 'rankings_screen.dart';
 import 'detail_screen.dart';
+import 'playback_launch_screen.dart';
 import 'downloads_screen.dart';
 import 'local_store.dart';
 import 'lan_screen.dart';
@@ -53,7 +54,6 @@ class _HomeScreenState extends State<HomeScreen> {
   int _generation = 0;
   int _tab = 0;
   String _submittedQuery = '';
-  bool _failedMore = false;
   final _categorySelections = <String, String>{};
   late final CatalogBrowser _browser;
   bool _searchVisible = false;
@@ -65,9 +65,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final _selectedDramas = <String, Drama>{};
   Timer? _cacheRefreshTimer;
   bool _refreshingUpdatedCache = false;
-  bool _updateNotice = false;
   bool _selectionMode = false;
   bool _showRecommendations = false;
+  bool _catalogLoadScheduled = false;
 
   List<SourceGroup> get _sourceGroups {
     final groups = SourceGroup.fromSources(widget.store.sources);
@@ -95,7 +95,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final names = online.map((source) => source.name).join('、');
     return online.length == _group.sources.length
         ? '搜索$names'
-        : '搜索${names}及本机剧库';
+        : '搜索$names及本机剧库';
   }
 
   String get _category => _categorySelections[_group.id] ?? '';
@@ -144,7 +144,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (widget.repository.supportsSourceManagement) {
       if (_group.sources.any((source) => _updater.busy(source.id))) return;
       _pauseCatalog();
-      setState(() => _updateNotice = true);
       await _updater.update(_group.sources);
       return;
     }
@@ -393,6 +392,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_onCatalogScroll);
     _source = SourceSite.byId(widget.store.source);
     _allSources = widget.store.catalogView.allSources;
     _browser = CatalogBrowser(widget.repository);
@@ -423,8 +423,36 @@ class _HomeScreenState extends State<HomeScreen> {
     unawaited(widget.repository.cancelSuggestions());
     _debounce?.cancel();
     _search.dispose();
+    _scroll.removeListener(_onCatalogScroll);
     _scroll.dispose();
     super.dispose();
+  }
+
+  void _onCatalogScroll() {
+    if (!mounted ||
+        _showRecommendations ||
+        !_hasMore ||
+        _loading ||
+        _loadingMore ||
+        !_scroll.hasClients) {
+      return;
+    }
+    final position = _scroll.position;
+    final threshold = (position.viewportDimension * 1.5).clamp(320.0, 900.0);
+    if (position.extentAfter > threshold || _catalogLoadScheduled) return;
+    _catalogLoadScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _catalogLoadScheduled = false;
+      if (!mounted ||
+          _showRecommendations ||
+          !_hasMore ||
+          _loading ||
+          _loadingMore ||
+          !_scroll.hasClients) {
+        return;
+      }
+      unawaited(_load(more: true));
+    });
   }
 
   void _metadataChanged() {
@@ -456,7 +484,6 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _error = null;
       if (query.isNotEmpty) _categorySelections[group.id] = '';
-      _failedMore = false;
       if (more) {
         _loadingMore = true;
       } else {
@@ -498,7 +525,6 @@ class _HomeScreenState extends State<HomeScreen> {
         _loading = false;
         _loadingMore = false;
         _error = error.toString();
-        _failedMore = more;
       });
     }
   }
@@ -513,7 +539,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _showRecommendations = false;
       _selectionMode = false;
       _selectedDramas.clear();
-      _updateNotice = false;
       _source = source;
       _allSources = allSources;
       _items = [];
@@ -586,15 +611,25 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _openDrama(Drama drama, {bool resume = false, bool download = false}) {
     _pauseCatalog();
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => DetailScreen(
-          drama: drama,
-          repository: widget.repository,
-          store: widget.store,
-          resumeOnOpen: resume,
-          downloadOnOpen: download,
+    if (download) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => DetailScreen(
+            drama: drama,
+            repository: widget.repository,
+            store: widget.store,
+            downloadOnOpen: true,
+          ),
         ),
+      );
+      return;
+    }
+    unawaited(
+      openPlaybackDirectly(
+        context,
+        drama: drama,
+        repository: widget.repository,
+        store: widget.store,
       ),
     );
   }
@@ -683,7 +718,7 @@ class _HomeScreenState extends State<HomeScreen> {
       selected: _selectionMode ? _selectedDramas.containsKey(drama.id) : null,
       badge: following == null
           ? null
-          : '${following.status.label}${following.newEpisodes > 0 ? ' · 更新 ${following.newEpisodes} 集' : ''}',
+          : '${following.status.label}${following.hasUpdates ? ' · ${following.updateLabel}' : ''}',
     );
   }
 
@@ -1177,48 +1212,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           )
         else ...[
-          if (widget.repository.supportsSourceManagement &&
-              (_updateNotice ||
-                  _group.sources.any((source) => _updater.busy(source.id))))
-            _updateStatus(),
           if (_loading && _items.isNotEmpty)
             const LinearProgressIndicator(minHeight: 2),
-          if (_error != null && _items.isNotEmpty)
-            Container(
-              margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.errorContainer,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _error!,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.onErrorContainer,
-                      ),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: _loading || _loadingMore
-                        ? null
-                        : () => _load(more: _failedMore, force: true),
-                    child: const Text('重试'),
-                  ),
-                  if (widget.repository.supportsSourceManagement)
-                    IconButton(
-                      tooltip: '站源诊断',
-                      onPressed: _manageSources,
-                      icon: const Icon(Icons.network_check),
-                    ),
-                ],
-              ),
-            ),
           Expanded(
             child: GestureDetector(
               onHorizontalDragEnd: television ? null : _swipeCategory,
@@ -1430,71 +1425,6 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _updateStatus() {
-    final sources = _group.sources;
-    final busy = sources.any((source) => _updater.busy(source.id));
-    final messages = <String>[];
-    var failed = false;
-    for (final source in sources) {
-      final status = _updater.status(source.id);
-      final error = [
-        _updater.error(source.id),
-        status?.error ?? '',
-        status?.storageError ?? '',
-      ].where((value) => value.isNotEmpty).toSet().join('；');
-      if (error.isNotEmpty) {
-        failed = true;
-        messages.add('${source.name}：$error');
-      } else if (status != null) {
-        messages.add(
-          '${source.name}：${status.stage.isEmpty ? '准备更新' : status.stage}'
-          '${status.total > 0 ? ' ${status.completed}/${status.total}' : ''}'
-          '${!status.running && status.added > 0 ? ' · 新增 ${status.added} 部' : ''}',
-        );
-      } else if (busy) {
-        messages.add('${source.name}：正在启动');
-      }
-    }
-    final colors = Theme.of(context).colorScheme;
-    return Material(
-      color: failed ? colors.errorContainer : colors.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                messages.isEmpty ? '准备更新剧库' : messages.join('；'),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: failed ? colors.onErrorContainer : colors.onSurface,
-                ),
-              ),
-            ),
-            if (busy)
-              TextButton(
-                onPressed: () => _updater.stop(sources),
-                child: const Text('停止'),
-              ),
-            IconButton(
-              tooltip: '查看更新详情',
-              onPressed: _manageSources,
-              icon: const Icon(Icons.info_outline_rounded, size: 20),
-            ),
-            if (!busy)
-              IconButton(
-                tooltip: '收起更新提示',
-                onPressed: () => setState(() => _updateNotice = false),
-                icon: const Icon(Icons.close_rounded, size: 20),
-              ),
-          ],
         ),
       ),
     );

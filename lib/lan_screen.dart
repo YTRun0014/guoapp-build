@@ -1022,7 +1022,9 @@ class LanPushButton extends StatelessWidget {
             ? '推送'
             : '推送到 ' + link.connection!.peer.name,
         onPressed: onPressed,
-        style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
+        constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+        padding: EdgeInsets.zero,
+        iconSize: 22,
         icon: link.pushing
             ? const SizedBox(
                 width: 22,

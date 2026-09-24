@@ -25,11 +25,15 @@ class RankingBoard {
     'huangguo-hot' ||
     'huangguo-recommend' ||
     'huangguo-potential' => 'huangguoai',
+    'huangju-hot' || 'huangju-new' => 'huangju',
+    'yeguo-recommend' => 'yeguo',
+    'dsd-catalog' => 'dsd',
     _ => '',
   };
   factory RankingBoard.fromJson(Map<String, dynamic> json) => RankingBoard(
     id: json['id'] as String? ?? '',
-    source: sourceForID(json['id'] as String? ?? ''),
+    source:
+        json['source'] as String? ?? sourceForID(json['id'] as String? ?? ''),
     name: json['name'] as String? ?? '',
     description: json['description'] as String? ?? '',
   );

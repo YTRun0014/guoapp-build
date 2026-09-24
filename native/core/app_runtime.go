@@ -67,7 +67,7 @@ type Downloader struct {
 	previewSessions       map[string]*huangguoPreviewSession
 }
 
-func defaultConfig() Config { return Config{MaxPagesPerSort: 1, PageSize: 30, Retries: 2} }
+func defaultConfig() Config { return Config{MaxPagesPerSort: 50, PageSize: 30, Retries: 2} }
 
 type nativeDrama struct {
 	MetadataSchema int      `json:"metadataSchema"`
